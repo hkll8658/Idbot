@@ -921,7 +921,6 @@ def broadcast_btn_handlers(m):
         return
     action = m.text
     if action in ("🍃back", "❌ Cancel"):
-        # Show loading animation
         load = show_loading(m.chat.id)
         delete_loading(m.chat.id, load)
         del broadcast_sessions[uid]
@@ -1325,7 +1324,7 @@ def admin_wizard_handler(m):
                              parse_mode='Markdown', reply_markup=wizard_confirm_keyboard())
         return
 
-# ---------- SETTINGS WIZARD (REWRITTEN – handles all six entry points) ----------
+# ---------- SETTINGS WIZARD ----------
 SETTING_MAP = {
     'link': 'channel_link',
     'botapi': 'bot_token',
@@ -1369,7 +1368,7 @@ def send_settings_step1(uid):
         kb.row("👁️ View Full", "❌ Cancel")
         kb.row("🍃back")
     elif setting == 'aiapi':
-        text = f"🦞 **Current AI API Key:** `{display}`\n\nSend new AI API key:\nExample: `sk-...` or `gsk-...`"
+        text = f"🦞 **Current AI API Key:** `{display}`\n\nSend new AI API key (any format accepted):"
         kb = ReplyKeyboardMarkup(resize_keyboard=True)
         kb.row("👁️ View Full", "❌ Cancel")
         kb.row("🍃back")
@@ -1540,13 +1539,10 @@ def settings_wizard_handler(m):
             del settings_sessions[uid]
     elif setting in ('botapi', 'aiapi'):
         if step == 1:
-            # Accept both sk- and gsk- prefixes for AI key
             if setting == 'botapi' and ':' not in text:
                 bot.reply_to(m, "❌ Invalid bot token format. It should contain ':'.")
                 return
-            if setting == 'aiapi' and not (text.startswith('sk-') or text.startswith('gsk-')):
-                bot.reply_to(m, "❌ Invalid AI API key format. It should start with 'sk-' or 'gsk-'.")
-                return
+            # No validation for AI key – accept anything
             sess['data']['token' if setting == 'botapi' else 'key'] = text
             send_settings_confirm(uid)
         else:
