@@ -23,6 +23,7 @@ logger = logging.getLogger(__name__)
 broadcast_sessions = {}
 admin_cmd_sessions = {}
 settings_sessions = {}
+# session for search from manageusers: we reuse admin_cmd_sessions with cmd='search_manage'
 
 def clear_user_sessions(user_id):
     for s in (broadcast_sessions, admin_cmd_sessions, settings_sessions):
@@ -172,6 +173,12 @@ class UserData:
     def unblock_user(self, user_id):
         self._ensure_user(user_id)
         self._execute("UPDATE users SET blocked=0 WHERE user_id=%s" if self.db_type=="mysql" else "UPDATE users SET blocked=0 WHERE user_id=?", (user_id,), commit=True)
+
+    def delete_user(self, user_id):
+        self._execute("DELETE FROM user_channels WHERE user_id=%s" if self.db_type=="mysql" else "DELETE FROM user_channels WHERE user_id=?", (user_id,), commit=True)
+        self._execute("DELETE FROM user_groups WHERE user_id=%s" if self.db_type=="mysql" else "DELETE FROM user_groups WHERE user_id=?", (user_id,), commit=True)
+        self._execute("DELETE FROM users WHERE user_id=%s" if self.db_type=="mysql" else "DELETE FROM users WHERE user_id=?", (user_id,), commit=True)
+        return True
 
     def set_ai_mode(self, user_id, status):
         self._ensure_user(user_id)
@@ -410,6 +417,19 @@ def get_user_display_name(uid):
     except:
         return f"User {uid}"
 
+def get_user_info_text(uid):
+    try:
+        chat = bot.get_chat(uid)
+        name = chat.first_name or "Unknown"
+        uname = f"@{chat.username}" if chat.username else "No username"
+        blocked = db.is_blocked(uid)
+        adm = is_admin(uid)
+        def esc_local(t):
+            return re.sub(r'([_*\[\]()~`>#+\-=|{}.!])', r'\\\1', str(t))
+        return f"👤 *User Info*\n━━━━━━━━━━━━━━━━━━\nID: `{uid}`\nName: {esc_local(name)}\nUsername: {esc_local(uname)}\nBlocked: {'Yes' if blocked else 'No'}\nAdmin: {'Yes' if adm else 'No'}"
+    except:
+        return f"❌ Could not fetch details for `{uid}`."
+
 # ---------- KEYBOARDS ----------
 def main_keyboard():
     kb = ReplyKeyboardMarkup(resize_keyboard=True)
@@ -453,7 +473,7 @@ def manage_users_reply_keyboard():
     kb = ReplyKeyboardMarkup(resize_keyboard=True)
     kb.row("🛸totalusers", "🚫blocksdusers")
     kb.row("🎃activeusers", "🛸addadmin")
-    kb.row("🍃back")
+    kb.row("🔍Search", "🍃back")   # Added Search button
     return kb
 
 def broadcast_reply_keyboard():
@@ -500,7 +520,7 @@ def broadcast_confirm_keyboard():
     kb.row("✅ Send Now", "❌ Cancel")
     return kb
 
-# ---------- USER LIST (FIXED – Markdown escaping) ----------
+# ---------- USER LIST ----------
 def build_user_list_keyboard(users, page, menu_type, per_page=10):
     try:
         start = (page - 1) * per_page
@@ -518,7 +538,6 @@ def build_user_list_keyboard(users, page, menu_type, per_page=10):
                 display = get_user_display_name(uid_int)
             except:
                 display = f"User {uid_int}"
-            # Escape display name for Markdown
             display_esc = esc(display)
 
             kb.add(InlineKeyboardButton(f"ℹ️ {display_esc}", callback_data=f"user_info_{uid_int}"))
@@ -530,6 +549,8 @@ def build_user_list_keyboard(users, page, menu_type, per_page=10):
                     kb.add(InlineKeyboardButton("🔓 Unblock", callback_data=f"unblock_from_list_{uid_int}_{menu_type}_{page}"))
             elif menu_type == 'blocked':
                 kb.add(InlineKeyboardButton("✅ Unblock", callback_data=f"unblock_from_list_{uid_int}_{menu_type}_{page}"))
+
+            kb.add(InlineKeyboardButton("🗑️ Delete", callback_data=f"delete_user_{uid_int}_{menu_type}_{page}"))
 
         nav = []
         if page > 1:
@@ -549,7 +570,6 @@ def build_user_list_keyboard(users, page, menu_type, per_page=10):
                 display = f"User {uid_int}"
             display_esc = esc(display)
             status = "🔒 Blocked" if db.is_blocked(uid_int) else "✅ Active"
-            # status is fixed, no special chars
             text += f"{idx}. `{uid}` {display_esc}\n   {status}\n"
 
         return text, kb
@@ -962,7 +982,6 @@ def broadcast_btn_handlers(m):
         return
     action = m.text
     if action in ("🍃back", "❌ Cancel"):
-        # REMOVED loading animation
         del broadcast_sessions[uid]
         try:
             bot.delete_message(m.chat.id, sess.get('prompt_msg_id', 0))
@@ -1201,7 +1220,7 @@ def admin_help_click(m):
     else:
         bot.reply_to(m, "❌ Unknown command.")
 
-# ---------- ADMIN WIZARD ----------
+# ---------- ADMIN WIZARD (extends to handle search from manageusers) ----------
 def start_admin_wizard(uid, cmd, chat_id):
     clear_user_sessions(uid)
     admin_cmd_sessions[uid] = {
@@ -1210,7 +1229,7 @@ def start_admin_wizard(uid, cmd, chat_id):
         'data': {},
         'chat_id': chat_id
     }
-    if cmd == 'search':
+    if cmd == 'search' or cmd == 'search_manage':
         bot.send_message(chat_id,
                          "🔍 *Search User*\n\nPlease send the user ID, username (with @), or name to search.",
                          parse_mode='Markdown', reply_markup=wizard_input_keyboard())
@@ -1249,7 +1268,6 @@ def admin_wizard_handler(m):
     text = m.text.strip()
 
     if text == "❌ Cancel":
-        # REMOVED loading animation
         del admin_cmd_sessions[uid]
         bot.send_message(m.chat.id, "❌ Your admin action was cancelled 🚫")
         bot.send_message(m.chat.id,
@@ -1265,7 +1283,7 @@ def admin_wizard_handler(m):
                              parse_mode='Markdown', reply_markup=admin_main_reply_keyboard())
         else:
             sess['step'] = 1
-            if cmd == 'search':
+            if cmd == 'search' or cmd == 'search_manage':
                 bot.send_message(m.chat.id,
                                  "🔍 *Search User*\n\nPlease send the user ID, username (with @), or name to search.",
                                  parse_mode='Markdown', reply_markup=wizard_input_keyboard())
@@ -1326,7 +1344,7 @@ def admin_wizard_handler(m):
                 bot.reply_to(m, f"✅ User `{uid_unblock}` unblocked.")
             else:
                 bot.reply_to(m, "❌ Invalid user.")
-        elif cmd == 'search':
+        elif cmd == 'search' or cmd == 'search_manage':
             bot.reply_to(m, "🔍 Search completed.")
         else:
             bot.reply_to(m, "❌ Unknown command.")
@@ -1337,7 +1355,7 @@ def admin_wizard_handler(m):
         return
 
     # INPUT handling
-    if cmd == 'search':
+    if cmd == 'search' or cmd == 'search_manage':
         uid_found = find_user_id(text)
         if not uid_found:
             bot.reply_to(m, "❌ User not found.")
@@ -1346,20 +1364,30 @@ def admin_wizard_handler(m):
                              f"🥀 Hello, *{m.from_user.first_name}* welcome back to admin👋",
                              parse_mode='Markdown', reply_markup=admin_main_reply_keyboard())
             return
-        try:
-            chat = bot.get_chat(uid_found)
-            name = chat.first_name or "Unknown"
-            uname = f"@{chat.username}" if chat.username else "No username"
-            blocked = db.is_blocked(uid_found)
-            adm = is_admin(uid_found)
-            def esc_local(t):
-                return re.sub(r'([_*\[\]()~`>#+\-=|{}.!])', r'\\\1', str(t))
-            result = f"👤 *User Info*\n━━━━━━━━━━━━━━━━━━\nID: `{uid_found}`\nName: {esc_local(name)}\nUsername: {esc_local(uname)}\nBlocked: {'Yes' if blocked else 'No'}\nAdmin: {'Yes' if adm else 'No'}"
-            bot.reply_to(m, result, parse_mode='Markdown')
-        except Exception as e:
-            bot.reply_to(m, f"❌ Error fetching user details: {e}")
-        bot.send_message(m.chat.id, "🔍 Search completed. Click below to go back.", reply_markup=wizard_search_keyboard())
-        sess['step'] = 'done'
+        # Store the found uid in session
+        sess['data']['uid'] = uid_found
+        sess['step'] = 2
+        info_text = get_user_info_text(uid_found)
+        # For search_manage, add action buttons
+        if cmd == 'search_manage':
+            action_kb = InlineKeyboardMarkup(row_width=2)
+            if db.is_blocked(uid_found):
+                action_kb.add(InlineKeyboardButton("🔓 Unblock", callback_data=f"search_unblock_{uid_found}"))
+            else:
+                action_kb.add(InlineKeyboardButton("🚫 Block", callback_data=f"search_block_{uid_found}"))
+            action_kb.add(InlineKeyboardButton("🗑️ Delete", callback_data=f"search_delete_{uid_found}"))
+            if is_admin(uid_found):
+                action_kb.add(InlineKeyboardButton("➖ Remove Admin", callback_data=f"search_removeadmin_{uid_found}"))
+            else:
+                action_kb.add(InlineKeyboardButton("➕ Add Admin", callback_data=f"search_addadmin_{uid_found}"))
+            action_kb.row(InlineKeyboardButton("❌ Cancel", callback_data="search_cancel"))
+            bot.send_message(m.chat.id, info_text, parse_mode='Markdown', reply_markup=action_kb)
+            # Keep session open, don't delete yet
+        else:
+            # Regular search (from admin help) – just show info and back
+            bot.send_message(m.chat.id, info_text, parse_mode='Markdown')
+            bot.send_message(m.chat.id, "🔍 Search completed. Click below to go back.", reply_markup=wizard_search_keyboard())
+            sess['step'] = 'done'
         return
     elif cmd in ('add', 'block', 'unblock', 'delete'):
         uid_found = find_user_id(text)
@@ -1391,339 +1419,132 @@ def admin_wizard_handler(m):
                              parse_mode='Markdown', reply_markup=wizard_confirm_keyboard())
         return
 
-# ---------- SETTINGS WIZARD ----------
-SETTING_MAP = {
-    'link': 'channel_link',
-    'botapi': 'bot_token',
-    'aiapi': 'ai_api_key'
-}
-
-def send_managebot_menu(chat_id):
-    bot.send_message(chat_id,
-                     "🧞welcome back to bot management system.\n🎭Select management button's🥀\n💬Owner Contact : @OWNERHIMANSHU",
-                     parse_mode='Markdown', reply_markup=manage_bot_reply_keyboard())
-
-def start_settings_wizard(uid, setting, chat_id):
-    clear_user_sessions(uid)
-    settings_sessions[uid] = {
-        'setting': setting,
-        'step': 1,
-        'data': {},
-        'chat_id': chat_id
-    }
-    send_settings_step1(uid)
-
-def send_settings_step1(uid):
-    sess = settings_sessions.get(uid)
-    if not sess:
+# ---------- CALLBACKS FOR SEARCH ACTIONS ----------
+@bot.callback_query_handler(func=lambda call: call.data.startswith("search_block_"))
+def search_block_cb(call):
+    uid = int(call.data.split("_")[2])
+    if not is_admin(call.from_user.id):
+        bot.answer_callback_query(call.id, "⛔ Unauthorized.")
         return
-    setting = sess['setting']
-    db_key = SETTING_MAP.get(setting)
-    cur_val = db.get_config(db_key)
-    display = str(cur_val) if cur_val is not None else "Not set"
-    if len(display) > 50:
-        display = display[:47] + "..."
+    db.block_user(uid)
+    db.add_log('block', f"Admin {call.from_user.id} blocked {uid}")
+    bot.answer_callback_query(call.id, f"✅ User {uid} blocked.", show_alert=True)
+    # Refresh info
+    update_search_result(call.message.chat.id, call.message.message_id, uid, call.from_user.id)
 
-    if setting == 'link':
-        text = f"🔗 **Current Channel Link:** `{display}`\n\nSend new channel link (invite URL):\nExample: `https://t.me/+abc123`"
-        kb = ReplyKeyboardMarkup(resize_keyboard=True)
-        kb.row("👁️ View Full", "❌ Cancel")
-        kb.row("🍃back")
-    elif setting == 'botapi':
-        text = f"🍶 **Current Bot Token:** `{display}`\n\nSend new bot API token:\nExample: `123456:ABC-DEF...`"
-        kb = ReplyKeyboardMarkup(resize_keyboard=True)
-        kb.row("👁️ View Full", "❌ Cancel")
-        kb.row("🍃back")
-    elif setting == 'aiapi':
-        text = f"🦞 **Current AI API Key:** `{display}`\n\nSend new AI API key (any format accepted):"
-        kb = ReplyKeyboardMarkup(resize_keyboard=True)
-        kb.row("👁️ View Full", "❌ Cancel")
-        kb.row("🍃back")
+@bot.callback_query_handler(func=lambda call: call.data.startswith("search_unblock_"))
+def search_unblock_cb(call):
+    uid = int(call.data.split("_")[2])
+    if not is_admin(call.from_user.id):
+        bot.answer_callback_query(call.id, "⛔ Unauthorized.")
+        return
+    db.unblock_user(uid)
+    db.add_log('unblock', f"Admin {call.from_user.id} unblocked {uid}")
+    bot.answer_callback_query(call.id, f"✅ User {uid} unblocked.", show_alert=True)
+    update_search_result(call.message.chat.id, call.message.message_id, uid, call.from_user.id)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("search_delete_"))
+def search_delete_cb(call):
+    uid = int(call.data.split("_")[2])
+    if not is_admin(call.from_user.id):
+        bot.answer_callback_query(call.id, "⛔ Unauthorized.")
+        return
+    # Ask for confirmation
+    confirm_kb = InlineKeyboardMarkup()
+    confirm_kb.row(
+        InlineKeyboardButton("✅ Yes, delete", callback_data=f"confirm_search_delete_{uid}"),
+        InlineKeyboardButton("❌ Cancel", callback_data="search_cancel")
+    )
+    bot.answer_callback_query(call.id)
+    bot.send_message(call.message.chat.id, f"⚠️ Are you sure you want to delete user `{uid}` permanently?", parse_mode='Markdown', reply_markup=confirm_kb)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("confirm_search_delete_"))
+def confirm_search_delete_cb(call):
+    uid = int(call.data.split("_")[3])
+    if not is_admin(call.from_user.id):
+        bot.answer_callback_query(call.id, "⛔ Unauthorized.")
+        return
+    db.delete_user(uid)
+    db.add_log('delete', f"Admin {call.from_user.id} deleted user {uid}")
+    bot.answer_callback_query(call.id, f"✅ User {uid} deleted.", show_alert=True)
+    try:
+        bot.delete_message(call.message.chat.id, call.message.message_id)
+    except:
+        pass
+    # Close search session and go back to manageusers
+    clear_user_sessions(call.from_user.id)
+    bot.send_message(call.message.chat.id,
+                     f"🥀 Hello, *{call.from_user.first_name}* welcome back to admin👋",
+                     parse_mode='Markdown', reply_markup=admin_main_reply_keyboard())
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("search_addadmin_"))
+def search_addadmin_cb(call):
+    uid = int(call.data.split("_")[2])
+    if not is_admin(call.from_user.id):
+        bot.answer_callback_query(call.id, "⛔ Unauthorized.")
+        return
+    if db.add_admin(uid):
+        db.add_log('add_admin', f"Admin {call.from_user.id} added admin {uid}")
+        bot.answer_callback_query(call.id, f"✅ User {uid} added as admin.", show_alert=True)
     else:
-        return
-    bot.send_message(sess['chat_id'], text, parse_mode='Markdown', reply_markup=kb)
+        bot.answer_callback_query(call.id, "⚠️ User is already admin.", show_alert=True)
+    update_search_result(call.message.chat.id, call.message.message_id, uid, call.from_user.id)
 
-def send_settings_step2(uid):
-    sess = settings_sessions.get(uid)
-    if not sess:
+@bot.callback_query_handler(func=lambda call: call.data.startswith("search_removeadmin_"))
+def search_removeadmin_cb(call):
+    uid = int(call.data.split("_")[2])
+    if not is_admin(call.from_user.id):
+        bot.answer_callback_query(call.id, "⛔ Unauthorized.")
         return
-    if sess['setting'] == 'link':
-        text = "🥀 Send the new channel ID (numeric).\nExample: `-1001234567890`"
-        kb = ReplyKeyboardMarkup(resize_keyboard=True)
-        kb.row("❌ Cancel", "🍃back")
-        bot.send_message(sess['chat_id'], text, parse_mode='Markdown', reply_markup=kb)
+    if is_admin(uid):
+        db.remove_admin(uid)
+        db.add_log('remove_admin', f"Admin {call.from_user.id} removed admin {uid}")
+        bot.answer_callback_query(call.id, f"✅ User {uid} removed from admins.", show_alert=True)
     else:
-        send_settings_confirm(uid)
+        bot.answer_callback_query(call.id, "⚠️ User is not an admin.", show_alert=True)
+    update_search_result(call.message.chat.id, call.message.message_id, uid, call.from_user.id)
 
-def send_settings_confirm(uid):
-    sess = settings_sessions.get(uid)
-    if not sess:
-        return
-    setting = sess['setting']
-    data = sess['data']
+@bot.callback_query_handler(func=lambda call: call.data == "search_cancel")
+def search_cancel_cb(call):
+    bot.answer_callback_query(call.id, "❌ Cancelled.")
+    try:
+        bot.delete_message(call.message.chat.id, call.message.message_id)
+    except:
+        pass
+    clear_user_sessions(call.from_user.id)
+    bot.send_message(call.message.chat.id,
+                     f"🥀 Hello, *{call.from_user.first_name}* welcome back to admin👋",
+                     parse_mode='Markdown', reply_markup=admin_main_reply_keyboard())
 
-    if setting == 'link':
-        link = data.get('link')
-        cid = data.get('id')
-        if not link or not cid:
-            bot.send_message(sess['chat_id'], "❌ Missing data. Please restart the wizard.")
-            del settings_sessions[uid]
-            return
-        text = f"🥀 **New Link:** `{link}`\n🥀 **New Channel ID:** `{cid}`\n\nConfirm update?"
-    elif setting == 'botapi':
-        token = data.get('token')
-        if not token:
-            bot.send_message(sess['chat_id'], "❌ Missing token. Please restart the wizard.")
-            del settings_sessions[uid]
-            return
-        text = f"🥀 **New Bot Token:** `{token}`\n\nConfirm update?"
-    elif setting == 'aiapi':
-        key = data.get('key')
-        if not key:
-            bot.send_message(sess['chat_id'], "❌ Missing key. Please restart the wizard.")
-            del settings_sessions[uid]
-            return
-        text = f"🥀 **New AI API Key:** `{key}`\n\nConfirm update?"
+def update_search_result(chat_id, message_id, uid, admin_id):
+    """Edit the search result message with updated info and actions."""
+    info_text = get_user_info_text(uid)
+    action_kb = InlineKeyboardMarkup(row_width=2)
+    if db.is_blocked(uid):
+        action_kb.add(InlineKeyboardButton("🔓 Unblock", callback_data=f"search_unblock_{uid}"))
     else:
-        return
-
-    kb = settings_confirm_keyboard()
-    bot.send_message(sess['chat_id'], text, parse_mode='Markdown', reply_markup=kb)
-    sess['step'] = 3
-
-@bot.message_handler(func=lambda m: m.from_user.id in settings_sessions)
-def settings_wizard_handler(m):
-    uid = m.from_user.id
-    sess = settings_sessions.get(uid)
-    if not sess:
-        return
-
-    text = m.text.strip()
-    setting = sess['setting']
-    step = sess.get('step', 1)
-
-    if text == "👁️ View Full":
-        db_key = SETTING_MAP.get(setting)
-        val = db.get_config(db_key)
-        if val is None:
-            bot.reply_to(m, "❌ Not set.")
-        else:
-            bot.reply_to(m, f"📋 **Current {setting.replace('_',' ').title()}:**\n`{val}`")
-        return
-
-    if text == "❌ Cancel":
-        # REMOVED loading animation
-        del settings_sessions[uid]
-        bot.send_message(m.chat.id, "❌ Your settings update was cancelled 🚫")
-        send_managebot_menu(m.chat.id)
-        return
-
-    if text == "🍃back":
-        if step == 3:
-            if setting == 'link':
-                sess['step'] = 2
-                sess['data'].pop('id', None)
-                send_settings_step2(uid)
-            else:
-                sess['step'] = 1
-                sess['data'].pop('token', None)
-                sess['data'].pop('key', None)
-                send_settings_step1(uid)
-        elif step == 2:
-            sess['step'] = 1
-            sess['data'].pop('link', None)
-            send_settings_step1(uid)
-        else:
-            del settings_sessions[uid]
-            send_managebot_menu(m.chat.id)
-        return
-
-    if text == "✅ Done":
-        data = sess.get('data', {})
-        if setting == 'link':
-            link = data.get('link')
-            cid = data.get('id')
-            if link and cid:
-                old_link = db.get_config('channel_link')
-                old_cid = db.get_config('channel_id')
-                db.set_config('channel_link', link)
-                db.set_config('channel_id', cid)
-                db.add_log('channel_link', f"Updated by admin {uid}: old={old_link}, new={link}, old_id={old_cid}, new_id={cid}")
-                bot.reply_to(m, "✅ Channel link and ID updated successfully!")
-            else:
-                bot.reply_to(m, "❌ Missing data. Please restart the wizard.")
-        elif setting == 'botapi':
-            token = data.get('token')
-            if token:
-                old = db.get_config('bot_token')
-                db.set_config('bot_token', token)
-                db.add_log('botapi', f"Updated by admin {uid}: old={old}, new={token}")
-                bot.reply_to(m, "✅ Bot token updated! Restarting in 3 seconds...")
-                del settings_sessions[uid]
-                time.sleep(1)
-                restart_bot()
-                return
-            else:
-                bot.reply_to(m, "❌ Missing token.")
-        elif setting == 'aiapi':
-            key = data.get('key')
-            if key:
-                old = db.get_config('ai_api_key')
-                db.set_config('ai_api_key', key)
-                db.add_log('aiapi', f"Updated by admin {uid}: old={old}, new={key}")
-                bot.reply_to(m, "✅ AI API key updated successfully!")
-            else:
-                bot.reply_to(m, "❌ Missing key.")
-        else:
-            bot.reply_to(m, "❌ Unknown setting.")
-        del settings_sessions[uid]
-        send_managebot_menu(m.chat.id)
-        return
-
-    # INPUT handling
-    if setting == 'link':
-        if step == 1:
-            if not text.startswith('https://t.me/'):
-                bot.reply_to(m, "❌ Invalid channel link. Must start with `https://t.me/`")
-                return
-            sess['data']['link'] = text
-            sess['step'] = 2
-            send_settings_step2(uid)
-        elif step == 2:
-            try:
-                cid = int(text)
-                sess['data']['id'] = cid
-                send_settings_confirm(uid)
-            except ValueError:
-                bot.reply_to(m, "❌ Invalid channel ID. Please send a numeric ID (e.g., `-1001234567890`).")
-        else:
-            bot.reply_to(m, "❌ Unexpected step. Please restart the wizard.")
-            del settings_sessions[uid]
-    elif setting in ('botapi', 'aiapi'):
-        if step == 1:
-            if setting == 'botapi' and ':' not in text:
-                bot.reply_to(m, "❌ Invalid bot token format. It should contain ':'.")
-                return
-            sess['data']['token' if setting == 'botapi' else 'key'] = text
-            send_settings_confirm(uid)
-        else:
-            bot.reply_to(m, "❌ Unexpected step. Please restart the wizard.")
-            del settings_sessions[uid]
+        action_kb.add(InlineKeyboardButton("🚫 Block", callback_data=f"search_block_{uid}"))
+    action_kb.add(InlineKeyboardButton("🗑️ Delete", callback_data=f"search_delete_{uid}"))
+    if is_admin(uid):
+        action_kb.add(InlineKeyboardButton("➖ Remove Admin", callback_data=f"search_removeadmin_{uid}"))
     else:
-        bot.reply_to(m, "❌ Unknown setting. Please restart the wizard.")
-        del settings_sessions[uid]
+        action_kb.add(InlineKeyboardButton("➕ Add Admin", callback_data=f"search_addadmin_{uid}"))
+    action_kb.row(InlineKeyboardButton("❌ Cancel", callback_data="search_cancel"))
+    try:
+        bot.edit_message_text(info_text, chat_id, message_id, parse_mode='Markdown', reply_markup=action_kb)
+    except:
+        bot.send_message(chat_id, info_text, parse_mode='Markdown', reply_markup=action_kb)
 
-# ---------- SETTINGS BUTTON HANDLERS (managebot) ----------
-@bot.message_handler(func=lambda m: m.text == "💠ChannelLink")
-def settings_link_btn(m):
-    if not is_admin(m.from_user.id):
-        return
-    clear_user_sessions(m.from_user.id)
-    deactivate_ai_mode(m.from_user.id)
-    start_settings_wizard(m.from_user.id, 'link', m.chat.id)
-
-@bot.message_handler(func=lambda m: m.text == "🍶botApi")
-def settings_botapi_btn(m):
-    if not is_admin(m.from_user.id):
-        return
-    clear_user_sessions(m.from_user.id)
-    deactivate_ai_mode(m.from_user.id)
-    start_settings_wizard(m.from_user.id, 'botapi', m.chat.id)
-
-@bot.message_handler(func=lambda m: m.text == "🦞Aiapi")
-def settings_aiapi_btn(m):
-    if not is_admin(m.from_user.id):
-        return
-    clear_user_sessions(m.from_user.id)
-    deactivate_ai_mode(m.from_user.id)
-    start_settings_wizard(m.from_user.id, 'aiapi', m.chat.id)
-
-# ---------- MANAGE USERS ----------
-@bot.message_handler(func=lambda m: m.text == "🛸totalusers")
-def total_users(m):
-    if not is_admin(m.from_user.id):
-        return
-    clear_user_sessions(m.from_user.id)
-    deactivate_ai_mode(m.from_user.id)
-    send_user_list(m.chat.id, 'total', 1)
-
-@bot.message_handler(func=lambda m: m.text == "🚫blocksdusers")
-def blocked_users(m):
-    if not is_admin(m.from_user.id):
-        return
-    clear_user_sessions(m.from_user.id)
-    deactivate_ai_mode(m.from_user.id)
-    send_user_list(m.chat.id, 'blocked', 1)
-
-@bot.message_handler(func=lambda m: m.text == "🎃activeusers")
-def active_users(m):
-    if not is_admin(m.from_user.id):
-        return
-    clear_user_sessions(m.from_user.id)
-    deactivate_ai_mode(m.from_user.id)
-    send_user_list(m.chat.id, 'active', 1)
-
-@bot.message_handler(func=lambda m: m.text == "🛸addadmin")
-def addadmin_btn(m):
-    if not is_admin(m.from_user.id):
-        return
-    clear_user_sessions(m.from_user.id)
-    deactivate_ai_mode(m.from_user.id)
-    start_admin_wizard(m.from_user.id, 'add', m.chat.id)
-
-@bot.message_handler(func=lambda m: m.text == "🎀admins")
-def list_admins(m):
-    if not is_admin(m.from_user.id):
-        return
-    clear_user_sessions(m.from_user.id)
-    deactivate_ai_mode(m.from_user.id)
-    admins = db.get_admins()
-    if not admins:
-        text = "No admins found."
-    else:
-        text = "👥 *Admin List:*\n━━━━━━━━━━━━━━━━━━\n"
-        for idx, uid in enumerate(admins, 1):
-            display = get_user_display_name(uid)
-            text += f"{idx}. `{uid}` {display}\n"
-        text += "\n🥙 /delete {cheatid} or {username} or {name}"
-    bot.send_message(m.chat.id, text, parse_mode='Markdown', reply_markup=add_admin_reply_keyboard())
-
-@bot.message_handler(func=lambda m: m.text == "🧳broadcastlog")
-def broadcast_logs(m):
-    if not is_admin(m.from_user.id):
-        return
-    clear_user_sessions(m.from_user.id)
-    deactivate_ai_mode(m.from_user.id)
-    logs = db.get_logs('broadcast')
-    if not logs:
-        text = "No broadcast logs found."
-    else:
-        text = "📋 *Broadcast Logs:*\n━━━━━━━━━━━━━━━━━━\n" + "\n".join(logs[-20:]) + "\n\n🍂 /clearlogs to clear logs"
-    kb = InlineKeyboardMarkup(row_width=2)
-    kb.add(InlineKeyboardButton("🍂clearlogs", callback_data="admin_clear_logs"))
-    bot.send_message(m.chat.id, text, parse_mode='Markdown', reply_markup=broadcast_reply_keyboard())
-    bot.send_message(m.chat.id, "Click below to clear logs:", reply_markup=kb)
-
-# ---------- USER INFO & BLOCK/UNBLOCK ----------
+# ---------- USER INFO, BLOCK, UNBLOCK, DELETE from list ----------
 @bot.callback_query_handler(func=lambda call: call.data.startswith("user_info_"))
 def user_info_cb(call):
     uid = int(call.data.split("_")[-1])
     if not is_admin(call.from_user.id):
         bot.answer_callback_query(call.id, "⛔ Unauthorized.")
         return
-    try:
-        chat = bot.get_chat(uid)
-        name = chat.first_name or "Unknown"
-        uname = f"@{chat.username}" if chat.username else "No username"
-        blocked = db.is_blocked(uid)
-        adm = is_admin(uid)
-        def esc_local(t):
-            return re.sub(r'([_*\[\]()~`>#+\-=|{}.!])', r'\\\1', str(t))
-        text = f"👤 *User Info*\n━━━━━━━━━━━━━━━━━━\nID: `{uid}`\nName: {esc_local(name)}\nUsername: {esc_local(uname)}\nBlocked: {'Yes' if blocked else 'No'}\nAdmin: {'Yes' if adm else 'No'}"
-        bot.answer_callback_query(call.id)
-        bot.send_message(call.message.chat.id, text, parse_mode='Markdown')
-    except:
-        bot.answer_callback_query(call.id, "Could not fetch user details.")
+    info_text = get_user_info_text(uid)
+    bot.answer_callback_query(call.id)
+    bot.send_message(call.message.chat.id, info_text, parse_mode='Markdown')
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("block_from_list_"))
 def block_from_list_cb(call):
@@ -1735,6 +1556,7 @@ def block_from_list_cb(call):
         bot.answer_callback_query(call.id, "⛔ Unauthorized.")
         return
     db.block_user(uid)
+    db.add_log('block', f"Admin {call.from_user.id} blocked {uid} from list")
     bot.answer_callback_query(call.id, f"✅ User {uid} blocked.", show_alert=True)
     try:
         bot.delete_message(call.message.chat.id, call.message.message_id)
@@ -1752,12 +1574,56 @@ def unblock_from_list_cb(call):
         bot.answer_callback_query(call.id, "⛔ Unauthorized.")
         return
     db.unblock_user(uid)
+    db.add_log('unblock', f"Admin {call.from_user.id} unblocked {uid} from list")
     bot.answer_callback_query(call.id, f"✅ User {uid} unblocked.", show_alert=True)
     try:
         bot.delete_message(call.message.chat.id, call.message.message_id)
     except:
         pass
     send_user_list(call.message.chat.id, menu, page)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("delete_user_"))
+def delete_user_cb(call):
+    parts = call.data.split("_")
+    uid = int(parts[2])
+    menu = parts[3]
+    page = int(parts[4])
+    if not is_admin(call.from_user.id):
+        bot.answer_callback_query(call.id, "⛔ Unauthorized.")
+        return
+    confirm_kb = InlineKeyboardMarkup()
+    confirm_kb.row(
+        InlineKeyboardButton("✅ Yes, delete", callback_data=f"confirm_delete_{uid}_{menu}_{page}"),
+        InlineKeyboardButton("❌ Cancel", callback_data=f"cancel_delete_user")
+    )
+    bot.answer_callback_query(call.id)
+    bot.send_message(call.message.chat.id, f"⚠️ Are you sure you want to delete user `{uid}` permanently?", parse_mode='Markdown', reply_markup=confirm_kb)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("confirm_delete_"))
+def confirm_delete_cb(call):
+    parts = call.data.split("_")
+    uid = int(parts[2])
+    menu = parts[3]
+    page = int(parts[4])
+    if not is_admin(call.from_user.id):
+        bot.answer_callback_query(call.id, "⛔ Unauthorized.")
+        return
+    db.delete_user(uid)
+    db.add_log('delete', f"Admin {call.from_user.id} deleted user {uid} from list")
+    bot.answer_callback_query(call.id, f"✅ User {uid} deleted successfully.", show_alert=True)
+    try:
+        bot.delete_message(call.message.chat.id, call.message.message_id)
+    except:
+        pass
+    send_user_list(call.message.chat.id, menu, page)
+
+@bot.callback_query_handler(func=lambda call: call.data == "cancel_delete_user")
+def cancel_delete_user_cb(call):
+    bot.answer_callback_query(call.id, "❌ Deletion cancelled.")
+    try:
+        bot.delete_message(call.message.chat.id, call.message.message_id)
+    except:
+        pass
 
 # ---------- PAGINATION ----------
 @bot.callback_query_handler(func=lambda call: call.data.startswith("admin_total_page_"))
@@ -2190,20 +2056,10 @@ def cmd_search(m):
         if not uid:
             bot.reply_to(m, "❌ User not found.")
             return
-        try:
-            chat = bot.get_chat(uid)
-            name = chat.first_name or "Unknown"
-            uname = f"@{chat.username}" if chat.username else "No username"
-            blocked = db.is_blocked(uid)
-            adm = is_admin(uid)
-            def esc_local(t):
-                return re.sub(r'([_*\[\]()~`>#+\-=|{}.!])', r'\\\1', str(t))
-            result = f"👤 *User Info*\n━━━━━━━━━━━━━━━━━━\nID: `{uid}`\nName: {esc_local(name)}\nUsername: {esc_local(uname)}\nBlocked: {'Yes' if blocked else 'No'}\nAdmin: {'Yes' if adm else 'No'}"
-            bot.reply_to(m, result, parse_mode='Markdown')
-        except Exception as e:
-            bot.reply_to(m, f"❌ Error: {e}")
+        info_text = get_user_info_text(uid)
+        bot.reply_to(m, info_text, parse_mode='Markdown')
     else:
-        start_admin_wizard(m.from_user.id, 'search', m.chat.id)
+        bot.reply_to(m, "❌ Please provide a user ID, username, or name.\nExample: `/search 123456789` or `/search @username`")
 
 @bot.message_handler(commands=['add'])
 def cmd_add(m):
@@ -2290,6 +2146,261 @@ def cmd_clearlogs(m):
     deactivate_ai_mode(m.from_user.id)
     db.clear_logs('broadcast')
     bot.reply_to(m, "🧹 Broadcast logs cleared.")
+
+# ---------- NEW: Search button from manageusers ----------
+@bot.message_handler(func=lambda m: m.text == "🔍Search")
+def search_from_manage(m):
+    if not is_admin(m.from_user.id):
+        return
+    clear_user_sessions(m.from_user.id)
+    deactivate_ai_mode(m.from_user.id)
+    start_admin_wizard(m.from_user.id, 'search_manage', m.chat.id)
+
+# ---------- SETTINGS WIZARD ----------
+SETTING_MAP = {
+    'link': 'channel_link',
+    'botapi': 'bot_token',
+    'aiapi': 'ai_api_key'
+}
+
+def send_managebot_menu(chat_id):
+    bot.send_message(chat_id,
+                     "🧞welcome back to bot management system.\n🎭Select management button's🥀\n💬Owner Contact : @OWNERHIMANSHU",
+                     parse_mode='Markdown', reply_markup=manage_bot_reply_keyboard())
+
+def start_settings_wizard(uid, setting, chat_id):
+    clear_user_sessions(uid)
+    settings_sessions[uid] = {
+        'setting': setting,
+        'step': 1,
+        'data': {},
+        'chat_id': chat_id
+    }
+    send_settings_step1(uid)
+
+def send_settings_step1(uid):
+    sess = settings_sessions.get(uid)
+    if not sess:
+        return
+    setting = sess['setting']
+    db_key = SETTING_MAP.get(setting)
+    cur_val = db.get_config(db_key)
+    display = str(cur_val) if cur_val is not None else "Not set"
+    if len(display) > 50:
+        display = display[:47] + "..."
+
+    if setting == 'link':
+        text = f"🔗 **Current Channel Link:** `{display}`\n\nSend new channel link (invite URL):\nExample: `https://t.me/+abc123`"
+        kb = ReplyKeyboardMarkup(resize_keyboard=True)
+        kb.row("👁️ View Full", "❌ Cancel")
+        kb.row("🍃back")
+    elif setting == 'botapi':
+        text = f"🍶 **Current Bot Token:** `{display}`\n\nSend new bot API token:\nExample: `123456:ABC-DEF...`"
+        kb = ReplyKeyboardMarkup(resize_keyboard=True)
+        kb.row("👁️ View Full", "❌ Cancel")
+        kb.row("🍃back")
+    elif setting == 'aiapi':
+        text = f"🦞 **Current AI API Key:** `{display}`\n\nSend new AI API key (any format accepted):"
+        kb = ReplyKeyboardMarkup(resize_keyboard=True)
+        kb.row("👁️ View Full", "❌ Cancel")
+        kb.row("🍃back")
+    else:
+        return
+    bot.send_message(sess['chat_id'], text, parse_mode='Markdown', reply_markup=kb)
+
+def send_settings_step2(uid):
+    sess = settings_sessions.get(uid)
+    if not sess:
+        return
+    if sess['setting'] == 'link':
+        text = "🥀 Send the new channel ID (numeric).\nExample: `-1001234567890`"
+        kb = ReplyKeyboardMarkup(resize_keyboard=True)
+        kb.row("❌ Cancel", "🍃back")
+        bot.send_message(sess['chat_id'], text, parse_mode='Markdown', reply_markup=kb)
+    else:
+        send_settings_confirm(uid)
+
+def send_settings_confirm(uid):
+    sess = settings_sessions.get(uid)
+    if not sess:
+        return
+    setting = sess['setting']
+    data = sess['data']
+
+    if setting == 'link':
+        link = data.get('link')
+        cid = data.get('id')
+        if not link or not cid:
+            bot.send_message(sess['chat_id'], "❌ Missing data. Please restart the wizard.")
+            del settings_sessions[uid]
+            return
+        text = f"🥀 **New Link:** `{link}`\n🥀 **New Channel ID:** `{cid}`\n\nConfirm update?"
+    elif setting == 'botapi':
+        token = data.get('token')
+        if not token:
+            bot.send_message(sess['chat_id'], "❌ Missing token. Please restart the wizard.")
+            del settings_sessions[uid]
+            return
+        text = f"🥀 **New Bot Token:** `{token}`\n\nConfirm update?"
+    elif setting == 'aiapi':
+        key = data.get('key')
+        if not key:
+            bot.send_message(sess['chat_id'], "❌ Missing key. Please restart the wizard.")
+            del settings_sessions[uid]
+            return
+        text = f"🥀 **New AI API Key:** `{key}`\n\nConfirm update?"
+    else:
+        return
+
+    kb = settings_confirm_keyboard()
+    bot.send_message(sess['chat_id'], text, parse_mode='Markdown', reply_markup=kb)
+    sess['step'] = 3
+
+@bot.message_handler(func=lambda m: m.from_user.id in settings_sessions)
+def settings_wizard_handler(m):
+    uid = m.from_user.id
+    sess = settings_sessions.get(uid)
+    if not sess:
+        return
+
+    text = m.text.strip()
+    setting = sess['setting']
+    step = sess.get('step', 1)
+
+    if text == "👁️ View Full":
+        db_key = SETTING_MAP.get(setting)
+        val = db.get_config(db_key)
+        if val is None:
+            bot.reply_to(m, "❌ Not set.")
+        else:
+            bot.reply_to(m, f"📋 **Current {setting.replace('_',' ').title()}:**\n`{val}`")
+        return
+
+    if text == "❌ Cancel":
+        del settings_sessions[uid]
+        bot.send_message(m.chat.id, "❌ Your settings update was cancelled 🚫")
+        send_managebot_menu(m.chat.id)
+        return
+
+    if text == "🍃back":
+        if step == 3:
+            if setting == 'link':
+                sess['step'] = 2
+                sess['data'].pop('id', None)
+                send_settings_step2(uid)
+            else:
+                sess['step'] = 1
+                sess['data'].pop('token', None)
+                sess['data'].pop('key', None)
+                send_settings_step1(uid)
+        elif step == 2:
+            sess['step'] = 1
+            sess['data'].pop('link', None)
+            send_settings_step1(uid)
+        else:
+            del settings_sessions[uid]
+            send_managebot_menu(m.chat.id)
+        return
+
+    if text == "✅ Done":
+        data = sess.get('data', {})
+        if setting == 'link':
+            link = data.get('link')
+            cid = data.get('id')
+            if link and cid:
+                old_link = db.get_config('channel_link')
+                old_cid = db.get_config('channel_id')
+                db.set_config('channel_link', link)
+                db.set_config('channel_id', cid)
+                db.add_log('channel_link', f"Updated by admin {uid}: old={old_link}, new={link}, old_id={old_cid}, new_id={cid}")
+                bot.reply_to(m, "✅ Channel link and ID updated successfully!")
+            else:
+                bot.reply_to(m, "❌ Missing data. Please restart the wizard.")
+        elif setting == 'botapi':
+            token = data.get('token')
+            if token:
+                old = db.get_config('bot_token')
+                db.set_config('bot_token', token)
+                db.add_log('botapi', f"Updated by admin {uid}: old={old}, new={token}")
+                bot.reply_to(m, "✅ Bot token updated! Restarting in 3 seconds...")
+                del settings_sessions[uid]
+                time.sleep(1)
+                restart_bot()
+                return
+            else:
+                bot.reply_to(m, "❌ Missing token.")
+        elif setting == 'aiapi':
+            key = data.get('key')
+            if key:
+                old = db.get_config('ai_api_key')
+                db.set_config('ai_api_key', key)
+                db.add_log('aiapi', f"Updated by admin {uid}: old={old}, new={key}")
+                bot.reply_to(m, "✅ AI API key updated successfully!")
+            else:
+                bot.reply_to(m, "❌ Missing key.")
+        else:
+            bot.reply_to(m, "❌ Unknown setting.")
+        del settings_sessions[uid]
+        send_managebot_menu(m.chat.id)
+        return
+
+    # INPUT handling
+    if setting == 'link':
+        if step == 1:
+            if not text.startswith('https://t.me/'):
+                bot.reply_to(m, "❌ Invalid channel link. Must start with `https://t.me/`")
+                return
+            sess['data']['link'] = text
+            sess['step'] = 2
+            send_settings_step2(uid)
+        elif step == 2:
+            try:
+                cid = int(text)
+                sess['data']['id'] = cid
+                send_settings_confirm(uid)
+            except ValueError:
+                bot.reply_to(m, "❌ Invalid channel ID. Please send a numeric ID (e.g., `-1001234567890`).")
+        else:
+            bot.reply_to(m, "❌ Unexpected step. Please restart the wizard.")
+            del settings_sessions[uid]
+    elif setting in ('botapi', 'aiapi'):
+        if step == 1:
+            if setting == 'botapi' and ':' not in text:
+                bot.reply_to(m, "❌ Invalid bot token format. It should contain ':'.")
+                return
+            sess['data']['token' if setting == 'botapi' else 'key'] = text
+            send_settings_confirm(uid)
+        else:
+            bot.reply_to(m, "❌ Unexpected step. Please restart the wizard.")
+            del settings_sessions[uid]
+    else:
+        bot.reply_to(m, "❌ Unknown setting. Please restart the wizard.")
+        del settings_sessions[uid]
+
+# ---------- SETTINGS BUTTON HANDLERS (managebot) ----------
+@bot.message_handler(func=lambda m: m.text == "💠ChannelLink")
+def settings_link_btn(m):
+    if not is_admin(m.from_user.id):
+        return
+    clear_user_sessions(m.from_user.id)
+    deactivate_ai_mode(m.from_user.id)
+    start_settings_wizard(m.from_user.id, 'link', m.chat.id)
+
+@bot.message_handler(func=lambda m: m.text == "🍶botApi")
+def settings_botapi_btn(m):
+    if not is_admin(m.from_user.id):
+        return
+    clear_user_sessions(m.from_user.id)
+    deactivate_ai_mode(m.from_user.id)
+    start_settings_wizard(m.from_user.id, 'botapi', m.chat.id)
+
+@bot.message_handler(func=lambda m: m.text == "🦞Aiapi")
+def settings_aiapi_btn(m):
+    if not is_admin(m.from_user.id):
+        return
+    clear_user_sessions(m.from_user.id)
+    deactivate_ai_mode(m.from_user.id)
+    start_settings_wizard(m.from_user.id, 'aiapi', m.chat.id)
 
 # ---------- MAIN ----------
 if __name__ == "__main__":
