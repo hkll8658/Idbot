@@ -1197,13 +1197,14 @@ def start_admin_wizard(uid, cmd, chat_id):
 @bot.message_handler(func=lambda m: m.from_user.id in admin_cmd_sessions)
 def admin_wizard_handler(m):
     uid = m.from_user.id
-    sess = admin_cmd_sessions[uid]
+    sess = admin_cmd_sessions.get(uid)
     if not sess:
         return
     cmd = sess['cmd']
-    step = sess['step']
+    step = sess.get('step', 1)
     text = m.text.strip()
 
+    # ---- CANCEL ----
     if text == "❌ Cancel":
         load = show_loading(m.chat.id)
         delete_loading(m.chat.id, load)
@@ -1214,6 +1215,7 @@ def admin_wizard_handler(m):
                          parse_mode='Markdown', reply_markup=admin_main_reply_keyboard())
         return
 
+    # ---- BACK ----
     if text == "🍃back":
         if step == 1:
             del admin_cmd_sessions[uid]
@@ -1221,13 +1223,38 @@ def admin_wizard_handler(m):
                              f"🥀 Hello, *{m.from_user.first_name}* welcome back to admin👋",
                              parse_mode='Markdown', reply_markup=admin_main_reply_keyboard())
         else:
-            # For admin wizard, only one step input then confirmation, so back cancels
-            del admin_cmd_sessions[uid]
-            bot.send_message(m.chat.id,
-                             f"🥀 Hello, *{m.from_user.first_name}* welcome back to admin👋",
-                             parse_mode='Markdown', reply_markup=admin_main_reply_keyboard())
+            # If we are in confirmation step, go back to input step
+            sess['step'] = 1
+            # Re-send the input prompt
+            if cmd == 'search':
+                bot.send_message(m.chat.id,
+                                 "🔍 *Search User*\n\nPlease send the user ID, username (with @), or name to search.",
+                                 parse_mode='Markdown', reply_markup=wizard_input_keyboard())
+            elif cmd == 'delete':
+                bot.send_message(m.chat.id,
+                                 "🗑️ *Remove Admin*\n\nPlease send the user ID, username (with @), or name to remove from admin list.",
+                                 parse_mode='Markdown', reply_markup=wizard_input_keyboard())
+            elif cmd == 'add':
+                bot.send_message(m.chat.id,
+                                 "➕ *Add Admin*\n\nPlease send the user ID, username (with @), or name to add as admin.",
+                                 parse_mode='Markdown', reply_markup=wizard_input_keyboard())
+            elif cmd == 'block':
+                bot.send_message(m.chat.id,
+                                 "🚫 *Block User*\n\nPlease send the user ID, username (with @), or name to block.",
+                                 parse_mode='Markdown', reply_markup=wizard_input_keyboard())
+            elif cmd == 'unblock':
+                bot.send_message(m.chat.id,
+                                 "✅ *Unblock User*\n\nPlease send the user ID, username (with @), or name to unblock.",
+                                 parse_mode='Markdown', reply_markup=wizard_input_keyboard())
+            else:
+                # For clearlogs, back cancels
+                del admin_cmd_sessions[uid]
+                bot.send_message(m.chat.id,
+                                 f"🥀 Hello, *{m.from_user.first_name}* welcome back to admin👋",
+                                 parse_mode='Markdown', reply_markup=admin_main_reply_keyboard())
         return
 
+    # ---- CONFIRM ----
     if text == "✅ Confirm":
         if cmd == 'clearlogs':
             db.clear_logs('broadcast')
@@ -1264,13 +1291,15 @@ def admin_wizard_handler(m):
                 bot.reply_to(m, "❌ Invalid user.")
         elif cmd == 'search':
             bot.reply_to(m, "🔍 Search completed.")
+        else:
+            bot.reply_to(m, "❌ Unknown command.")
         del admin_cmd_sessions[uid]
         bot.send_message(m.chat.id,
                          f"🥀 Hello, *{m.from_user.first_name}* welcome back to admin👋",
                          parse_mode='Markdown', reply_markup=admin_main_reply_keyboard())
         return
 
-    # INPUT handling for admin wizard
+    # ---- INPUT HANDLING ----
     if cmd == 'search':
         uid_found = find_user_id(text)
         if not uid_found:
@@ -1305,6 +1334,7 @@ def admin_wizard_handler(m):
                              parse_mode='Markdown', reply_markup=admin_main_reply_keyboard())
             return
         sess['data']['uid'] = uid_found
+        sess['step'] = 2  # confirmation step
         try:
             chat = bot.get_chat(uid_found)
             name = chat.first_name or "Unknown"
@@ -1323,6 +1353,9 @@ def admin_wizard_handler(m):
             bot.send_message(m.chat.id, f"Confirm action for `{uid_found}`?",
                              parse_mode='Markdown', reply_markup=wizard_confirm_keyboard())
         return
+    else:
+        # For clearlogs, we don't get input
+        pass
 
 # ---------- SETTINGS WIZARD ----------
 SETTING_MAP = {
