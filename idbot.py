@@ -1318,7 +1318,7 @@ def admin_wizard_handler(m):
                              parse_mode='Markdown', reply_markup=wizard_confirm_keyboard())
         return
 
-# ---------- SETTINGS WIZARD (REWRITTEN, handles all six entry points) ----------
+# ---------- SETTINGS WIZARD (REWRITTEN – handles all six entry points) ----------
 SETTING_MAP = {
     'link': 'channel_link',
     'botapi': 'bot_token',
