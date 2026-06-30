@@ -1949,7 +1949,18 @@ def get_ai_response(msg, key):
         logger.error(f"AI exception: {e}")
         return None
 
-# ---------- AI REPLY HANDLER ----------
+# ---------- GENERIC BACK HANDLER – placed BEFORE AI to avoid interception ----------
+@bot.message_handler(func=lambda m: m.text == "🍃back")
+def back_admin(m):
+    if not is_admin(m.from_user.id):
+        return
+    clear_user_sessions(m.from_user.id)
+    deactivate_ai_mode(m.from_user.id)
+    bot.send_message(m.chat.id,
+                     f"🥀 Hello, *{m.from_user.first_name}* welcome back to admin👋",
+                     parse_mode='Markdown', reply_markup=admin_main_reply_keyboard())
+
+# ---------- AI REPLY HANDLER – MUST BE AT THE VERY END ----------
 @bot.message_handler(func=lambda message: True)
 def ai_reply_all(m):
     uid = m.from_user.id if m.from_user else None
@@ -2218,17 +2229,6 @@ def cmd_clearlogs(m):
     deactivate_ai_mode(m.from_user.id)
     db.clear_logs('broadcast')
     bot.reply_to(m, "🧹 Broadcast logs cleared.")
-
-# ---------- GENERIC BACK HANDLER (only when no session is active) ----------
-@bot.message_handler(func=lambda m: m.text == "🍃back")
-def back_admin(m):
-    if not is_admin(m.from_user.id):
-        return
-    clear_user_sessions(m.from_user.id)
-    deactivate_ai_mode(m.from_user.id)
-    bot.send_message(m.chat.id,
-                     f"🥀 Hello, *{m.from_user.first_name}* welcome back to admin👋",
-                     parse_mode='Markdown', reply_markup=admin_main_reply_keyboard())
 
 # ---------- MAIN ----------
 if __name__ == "__main__":
