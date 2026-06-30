@@ -921,11 +921,15 @@ def broadcast_btn_handlers(m):
         return
     action = m.text
     if action in ("🍃back", "❌ Cancel"):
+        # Show loading animation
+        load = show_loading(m.chat.id)
+        delete_loading(m.chat.id, load)
         del broadcast_sessions[uid]
         try:
             bot.delete_message(m.chat.id, sess.get('prompt_msg_id', 0))
         except:
             pass
+        bot.send_message(m.chat.id, "❌ Your broadcast session was cancelled 🚫")
         bot.send_message(m.chat.id,
                          f"🥀 Hello, *{m.from_user.first_name}* welcome back to admin👋",
                          parse_mode='Markdown', reply_markup=admin_main_reply_keyboard())
@@ -1202,7 +1206,10 @@ def admin_wizard_handler(m):
     text = m.text.strip()
 
     if text == "❌ Cancel":
+        load = show_loading(m.chat.id)
+        delete_loading(m.chat.id, load)
         del admin_cmd_sessions[uid]
+        bot.send_message(m.chat.id, "❌ Your admin action was cancelled 🚫")
         bot.send_message(m.chat.id,
                          f"🥀 Hello, *{m.from_user.first_name}* welcome back to admin👋",
                          parse_mode='Markdown', reply_markup=admin_main_reply_keyboard())
@@ -1362,7 +1369,7 @@ def send_settings_step1(uid):
         kb.row("👁️ View Full", "❌ Cancel")
         kb.row("🍃back")
     elif setting == 'aiapi':
-        text = f"🦞 **Current AI API Key:** `{display}`\n\nSend new AI API key:\nExample: `sk-...`"
+        text = f"🦞 **Current AI API Key:** `{display}`\n\nSend new AI API key:\nExample: `sk-...` or `gsk-...`"
         kb = ReplyKeyboardMarkup(resize_keyboard=True)
         kb.row("👁️ View Full", "❌ Cancel")
         kb.row("🍃back")
@@ -1441,7 +1448,10 @@ def settings_wizard_handler(m):
 
     # ---- CANCEL ----
     if text == "❌ Cancel":
+        load = show_loading(m.chat.id)
+        delete_loading(m.chat.id, load)
         del settings_sessions[uid]
+        bot.send_message(m.chat.id, "❌ Your settings update was cancelled 🚫")
         send_managebot_menu(m.chat.id)
         return
 
@@ -1530,11 +1540,12 @@ def settings_wizard_handler(m):
             del settings_sessions[uid]
     elif setting in ('botapi', 'aiapi'):
         if step == 1:
+            # Accept both sk- and gsk- prefixes for AI key
             if setting == 'botapi' and ':' not in text:
                 bot.reply_to(m, "❌ Invalid bot token format. It should contain ':'.")
                 return
-            if setting == 'aiapi' and not text.startswith('sk-'):
-                bot.reply_to(m, "❌ Invalid AI API key format. It should start with 'sk-'.")
+            if setting == 'aiapi' and not (text.startswith('sk-') or text.startswith('gsk-')):
+                bot.reply_to(m, "❌ Invalid AI API key format. It should start with 'sk-' or 'gsk-'.")
                 return
             sess['data']['token' if setting == 'botapi' else 'key'] = text
             send_settings_confirm(uid)
