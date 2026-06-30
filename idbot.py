@@ -494,7 +494,7 @@ def broadcast_confirm_keyboard():
     kb.row("✅ Send Now", "❌ Cancel")
     return kb
 
-# ---------- USER LIST (FIXED) ----------
+# ---------- USER LIST (FIXED WITH ERROR DISPLAY) ----------
 def build_user_list_keyboard(users, page, menu_type, per_page=10):
     try:
         start = (page - 1) * per_page
@@ -546,7 +546,7 @@ def build_user_list_keyboard(users, page, menu_type, per_page=10):
 
     except Exception as e:
         logger.error(f"Error building user list: {e}")
-        return "❌ Error loading user list. Please try again later.", None
+        return f"❌ Error building user list: {e}", None
 
 def send_user_list(chat_id, menu_type, page, edit_msg_id=None):
     try:
@@ -577,20 +577,26 @@ def send_user_list(chat_id, menu_type, page, edit_msg_id=None):
             return
 
         text, kb = build_user_list_keyboard(users, page, menu_type)
+        if kb is None:
+            # If keyboard building failed, show error and return to menu
+            bot.send_message(chat_id, text, reply_markup=manage_users_reply_keyboard())
+            return
+
         header = f"👋Hii admin welcome back.\n💠here is the {title}.\n🌶️{action}: {len(users)}\n\n"
         full = header + text
 
         if edit_msg_id:
             try:
                 bot.edit_message_text(full, chat_id, edit_msg_id, parse_mode='Markdown', reply_markup=kb)
-            except:
-                bot.send_message(chat_id, full, parse_mode='Markdown', reply_markup=kb)
+            except Exception as e:
+                bot.send_message(chat_id, f"❌ Error updating message: {e}", reply_markup=manage_users_reply_keyboard())
         else:
             bot.send_message(chat_id, full, parse_mode='Markdown', reply_markup=kb)
 
     except Exception as e:
         logger.error(f"Error in send_user_list: {e}")
-        bot.send_message(chat_id, "❌ An error occurred while loading user list. Please try again later.",
+        # Show the actual error to help debug
+        bot.send_message(chat_id, f"❌ An error occurred while loading user list: {e}\nPlease report this to the developer.",
                          reply_markup=manage_users_reply_keyboard())
 
 # ---------- CHAT MEMBER ----------
@@ -948,8 +954,7 @@ def broadcast_btn_handlers(m):
         return
     action = m.text
     if action in ("🍃back", "❌ Cancel"):
-        load = show_loading(m.chat.id)
-        delete_loading(m.chat.id, load)
+        # REMOVED loading animation
         del broadcast_sessions[uid]
         try:
             bot.delete_message(m.chat.id, sess.get('prompt_msg_id', 0))
@@ -1236,8 +1241,7 @@ def admin_wizard_handler(m):
     text = m.text.strip()
 
     if text == "❌ Cancel":
-        load = show_loading(m.chat.id)
-        delete_loading(m.chat.id, load)
+        # REMOVED loading animation
         del admin_cmd_sessions[uid]
         bot.send_message(m.chat.id, "❌ Your admin action was cancelled 🚫")
         bot.send_message(m.chat.id,
@@ -1500,8 +1504,7 @@ def settings_wizard_handler(m):
         return
 
     if text == "❌ Cancel":
-        load = show_loading(m.chat.id)
-        delete_loading(m.chat.id, load)
+        # REMOVED loading animation
         del settings_sessions[uid]
         bot.send_message(m.chat.id, "❌ Your settings update was cancelled 🚫")
         send_managebot_menu(m.chat.id)
