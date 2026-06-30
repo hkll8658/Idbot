@@ -1161,11 +1161,16 @@ def admin_help_click(m):
     else:
         bot.reply_to(m, "❌ Unknown command.")
 
-# ---------- ADMIN WIZARD ----------
+# ---------- ADMIN WIZARD (REWRITTEN) ----------
 def start_admin_wizard(uid, cmd, chat_id):
     clear_user_sessions(uid)
-    sess = {'cmd': cmd, 'step': 1, 'data': {}, 'chat_id': chat_id}
-    admin_cmd_sessions[uid] = sess
+    admin_cmd_sessions[uid] = {
+        'cmd': cmd,
+        'step': 1,   # 1 = input, 2 = confirmation
+        'data': {},
+        'chat_id': chat_id
+    }
+    # Send the appropriate prompt
     if cmd == 'search':
         bot.send_message(chat_id,
                          "🔍 *Search User*\n\nPlease send the user ID, username (with @), or name to search.",
@@ -1223,7 +1228,7 @@ def admin_wizard_handler(m):
                              f"🥀 Hello, *{m.from_user.first_name}* welcome back to admin👋",
                              parse_mode='Markdown', reply_markup=admin_main_reply_keyboard())
         else:
-            # If we are in confirmation step, go back to input step
+            # step == 2, go back to input step
             sess['step'] = 1
             # Re-send the input prompt
             if cmd == 'search':
@@ -1265,7 +1270,7 @@ def admin_wizard_handler(m):
                 db.remove_admin(uid_del)
                 bot.reply_to(m, f"✅ User `{uid_del}` removed from admins.")
             else:
-                bot.reply_to(m, "❌ Invalid user.")
+                bot.reply_to(m, "❌ Invalid user or not an admin.")
         elif cmd == 'add':
             uid_add = sess['data'].get('uid')
             if uid_add:
@@ -1290,6 +1295,7 @@ def admin_wizard_handler(m):
             else:
                 bot.reply_to(m, "❌ Invalid user.")
         elif cmd == 'search':
+            # Already handled in input step, but just in case
             bot.reply_to(m, "🔍 Search completed.")
         else:
             bot.reply_to(m, "❌ Unknown command.")
@@ -1334,7 +1340,7 @@ def admin_wizard_handler(m):
                              parse_mode='Markdown', reply_markup=admin_main_reply_keyboard())
             return
         sess['data']['uid'] = uid_found
-        sess['step'] = 2  # confirmation step
+        sess['step'] = 2
         try:
             chat = bot.get_chat(uid_found)
             name = chat.first_name or "Unknown"
@@ -1354,10 +1360,10 @@ def admin_wizard_handler(m):
                              parse_mode='Markdown', reply_markup=wizard_confirm_keyboard())
         return
     else:
-        # For clearlogs, we don't get input
+        # For clearlogs, no input expected
         pass
 
-# ---------- SETTINGS WIZARD ----------
+# ---------- SETTINGS WIZARD (unchanged) ----------
 SETTING_MAP = {
     'link': 'channel_link',
     'botapi': 'bot_token',
@@ -1468,7 +1474,6 @@ def settings_wizard_handler(m):
     setting = sess['setting']
     step = sess.get('step', 1)
 
-    # ---- VIEW FULL ----
     if text == "👁️ View Full":
         db_key = SETTING_MAP.get(setting)
         val = db.get_config(db_key)
@@ -1478,7 +1483,6 @@ def settings_wizard_handler(m):
             bot.reply_to(m, f"📋 **Current {setting.replace('_',' ').title()}:**\n`{val}`")
         return
 
-    # ---- CANCEL ----
     if text == "❌ Cancel":
         load = show_loading(m.chat.id)
         delete_loading(m.chat.id, load)
@@ -1487,7 +1491,6 @@ def settings_wizard_handler(m):
         send_managebot_menu(m.chat.id)
         return
 
-    # ---- BACK ----
     if text == "🍃back":
         if step == 3:
             if setting == 'link':
@@ -1508,7 +1511,6 @@ def settings_wizard_handler(m):
             send_managebot_menu(m.chat.id)
         return
 
-    # ---- DONE (Update Database) ----
     if text == "✅ Done":
         data = sess.get('data', {})
         if setting == 'link':
@@ -1575,7 +1577,6 @@ def settings_wizard_handler(m):
             if setting == 'botapi' and ':' not in text:
                 bot.reply_to(m, "❌ Invalid bot token format. It should contain ':'.")
                 return
-            # No validation for AI key – accept anything
             sess['data']['token' if setting == 'botapi' else 'key'] = text
             send_settings_confirm(uid)
         else:
@@ -1635,15 +1636,14 @@ def active_users(m):
     deactivate_ai_mode(m.from_user.id)
     send_user_list(m.chat.id, 'active', 1)
 
+# ---- Changed to start admin wizard ----
 @bot.message_handler(func=lambda m: m.text == "🛸addadmin")
 def addadmin_btn(m):
     if not is_admin(m.from_user.id):
         return
     clear_user_sessions(m.from_user.id)
     deactivate_ai_mode(m.from_user.id)
-    bot.send_message(m.chat.id,
-                     "👋Hii admin welcome back\n🥀for adding new admin command:\n🍹/add {cheatid} or {username} or {name}",
-                     parse_mode='Markdown', reply_markup=add_admin_reply_keyboard())
+    start_admin_wizard(m.from_user.id, 'add', m.chat.id)
 
 @bot.message_handler(func=lambda m: m.text == "🎀admins")
 def list_admins(m):
@@ -1935,13 +1935,17 @@ def cancel_delete_cb(call):
 
 # ---------- HELPERS ----------
 def find_user_id(query):
-    q = query.lower()
+    q = query.strip()
+    # Try to parse as integer ID
+    if q.isdigit():
+        return int(q)
+    # Search by username or name
     for uid in db.get_all_users():
         try:
             chat = bot.get_chat(int(uid))
             name = (chat.first_name or "").lower()
             uname = (chat.username or "").lower()
-            if q in name or q in uname or q == str(uid):
+            if q.lower() in name or q.lower() in uname:
                 return int(uid)
         except:
             pass
