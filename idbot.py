@@ -494,77 +494,104 @@ def broadcast_confirm_keyboard():
     kb.row("✅ Send Now", "❌ Cancel")
     return kb
 
-# ---------- USER LIST ----------
+# ---------- USER LIST (FIXED) ----------
 def build_user_list_keyboard(users, page, menu_type, per_page=10):
-    start = (page - 1) * per_page
-    end = start + per_page
-    list_users = users[start:end]
-    if not list_users:
-        return "No users found.", None
-    total = (len(users) + per_page - 1) // per_page
-    kb = InlineKeyboardMarkup(row_width=2)
-    for uid in list_users:
-        uid_int = int(uid)
-        display = get_user_display_name(uid_int)
-        kb.add(InlineKeyboardButton(f"ℹ️ {display}", callback_data=f"user_info_{uid_int}"))
-        if menu_type in ('total', 'active'):
-            if not db.is_blocked(uid_int):
-                kb.add(InlineKeyboardButton("🚫 Block", callback_data=f"block_from_list_{uid_int}_{menu_type}_{page}"))
-            else:
-                kb.add(InlineKeyboardButton("🔓 Unblock", callback_data=f"unblock_from_list_{uid_int}_{menu_type}_{page}"))
-        elif menu_type == 'blocked':
-            kb.add(InlineKeyboardButton("✅ Unblock", callback_data=f"unblock_from_list_{uid_int}_{menu_type}_{page}"))
-    nav = []
-    if page > 1:
-        nav.append(InlineKeyboardButton("◀️ Prev", callback_data=f"admin_{menu_type}_page_{page-1}"))
-    if page < total:
-        nav.append(InlineKeyboardButton("Next ▶️", callback_data=f"admin_{menu_type}_page_{page+1}"))
-    if nav:
-        kb.row(*nav)
-    kb.row(InlineKeyboardButton("🍃back", callback_data="admin_pagination_back"))
-    text = f"📋 *User List (Page {page}/{total})*\n━━━━━━━━━━━━━━━━━━\n"
-    for idx, uid in enumerate(list_users, start=start + 1):
-        uid_int = int(uid)
-        display = get_user_display_name(uid_int)
-        status = "🔒 Blocked" if db.is_blocked(uid_int) else "✅ Active"
-        text += f"{idx}. `{uid}` {display}\n   {status}\n"
-    return text, kb
+    try:
+        start = (page - 1) * per_page
+        end = start + per_page
+        list_users = users[start:end]
+        if not list_users:
+            return "No users found.", None
+        total = (len(users) + per_page - 1) // per_page
+
+        kb = InlineKeyboardMarkup(row_width=2)
+
+        for uid in list_users:
+            uid_int = int(uid)
+            try:
+                display = get_user_display_name(uid_int)
+            except:
+                display = f"User {uid_int}"
+
+            kb.add(InlineKeyboardButton(f"ℹ️ {display}", callback_data=f"user_info_{uid_int}"))
+
+            if menu_type in ('total', 'active'):
+                if not db.is_blocked(uid_int):
+                    kb.add(InlineKeyboardButton("🚫 Block", callback_data=f"block_from_list_{uid_int}_{menu_type}_{page}"))
+                else:
+                    kb.add(InlineKeyboardButton("🔓 Unblock", callback_data=f"unblock_from_list_{uid_int}_{menu_type}_{page}"))
+            elif menu_type == 'blocked':
+                kb.add(InlineKeyboardButton("✅ Unblock", callback_data=f"unblock_from_list_{uid_int}_{menu_type}_{page}"))
+
+        nav = []
+        if page > 1:
+            nav.append(InlineKeyboardButton("◀️ Prev", callback_data=f"admin_{menu_type}_page_{page-1}"))
+        if page < total:
+            nav.append(InlineKeyboardButton("Next ▶️", callback_data=f"admin_{menu_type}_page_{page+1}"))
+        if nav:
+            kb.row(*nav)
+        kb.row(InlineKeyboardButton("🍃back", callback_data="admin_pagination_back"))
+
+        text = f"📋 *User List (Page {page}/{total})*\n━━━━━━━━━━━━━━━━━━\n"
+        for idx, uid in enumerate(list_users, start=start + 1):
+            uid_int = int(uid)
+            try:
+                display = get_user_display_name(uid_int)
+            except:
+                display = f"User {uid_int}"
+            status = "🔒 Blocked" if db.is_blocked(uid_int) else "✅ Active"
+            text += f"{idx}. `{uid}` {display}\n   {status}\n"
+
+        return text, kb
+
+    except Exception as e:
+        logger.error(f"Error building user list: {e}")
+        return "❌ Error loading user list. Please try again later.", None
 
 def send_user_list(chat_id, menu_type, page, edit_msg_id=None):
-    if menu_type == 'total':
-        users = db.get_all_users()
-        title = "users info"
-        action = "total user"
-    elif menu_type == 'blocked':
-        users = [u for u in db.get_all_users() if db.is_blocked(int(u))]
-        title = "blocked users"
-        action = "block user"
-    elif menu_type == 'active':
-        users = [u for u in db.get_all_users() if not db.is_blocked(int(u))]
-        title = "active users"
-        action = "active user"
-    else:
-        return
-    if not users:
-        text = f"No {action} found."
+    try:
+        if menu_type == 'total':
+            users = db.get_all_users()
+            title = "users info"
+            action = "total user"
+        elif menu_type == 'blocked':
+            users = [u for u in db.get_all_users() if db.is_blocked(int(u))]
+            title = "blocked users"
+            action = "block user"
+        elif menu_type == 'active':
+            users = [u for u in db.get_all_users() if not db.is_blocked(int(u))]
+            title = "active users"
+            action = "active user"
+        else:
+            return
+
+        if not users:
+            text = f"No {action} found."
+            if edit_msg_id:
+                try:
+                    bot.edit_message_text(text, chat_id, edit_msg_id, reply_markup=manage_users_reply_keyboard())
+                except:
+                    bot.send_message(chat_id, text, reply_markup=manage_users_reply_keyboard())
+            else:
+                bot.send_message(chat_id, text, reply_markup=manage_users_reply_keyboard())
+            return
+
+        text, kb = build_user_list_keyboard(users, page, menu_type)
+        header = f"👋Hii admin welcome back.\n💠here is the {title}.\n🌶️{action}: {len(users)}\n\n"
+        full = header + text
+
         if edit_msg_id:
             try:
-                bot.edit_message_text(text, chat_id, edit_msg_id, reply_markup=manage_users_reply_keyboard())
+                bot.edit_message_text(full, chat_id, edit_msg_id, parse_mode='Markdown', reply_markup=kb)
             except:
-                bot.send_message(chat_id, text, reply_markup=manage_users_reply_keyboard())
+                bot.send_message(chat_id, full, parse_mode='Markdown', reply_markup=kb)
         else:
-            bot.send_message(chat_id, text, reply_markup=manage_users_reply_keyboard())
-        return
-    text, kb = build_user_list_keyboard(users, page, menu_type)
-    header = f"👋Hii admin welcome back.\n💠here is the {title}.\n🌶️{action}: {len(users)}\n\n"
-    full = header + text
-    if edit_msg_id:
-        try:
-            bot.edit_message_text(full, chat_id, edit_msg_id, parse_mode='Markdown', reply_markup=kb)
-        except:
             bot.send_message(chat_id, full, parse_mode='Markdown', reply_markup=kb)
-    else:
-        bot.send_message(chat_id, full, parse_mode='Markdown', reply_markup=kb)
+
+    except Exception as e:
+        logger.error(f"Error in send_user_list: {e}")
+        bot.send_message(chat_id, "❌ An error occurred while loading user list. Please try again later.",
+                         reply_markup=manage_users_reply_keyboard())
 
 # ---------- CHAT MEMBER ----------
 @bot.chat_member_handler()
@@ -1161,16 +1188,15 @@ def admin_help_click(m):
     else:
         bot.reply_to(m, "❌ Unknown command.")
 
-# ---------- ADMIN WIZARD (REWRITTEN) ----------
+# ---------- ADMIN WIZARD ----------
 def start_admin_wizard(uid, cmd, chat_id):
     clear_user_sessions(uid)
     admin_cmd_sessions[uid] = {
         'cmd': cmd,
-        'step': 1,   # 1 = input, 2 = confirmation
+        'step': 1,
         'data': {},
         'chat_id': chat_id
     }
-    # Send the appropriate prompt
     if cmd == 'search':
         bot.send_message(chat_id,
                          "🔍 *Search User*\n\nPlease send the user ID, username (with @), or name to search.",
@@ -1209,7 +1235,6 @@ def admin_wizard_handler(m):
     step = sess.get('step', 1)
     text = m.text.strip()
 
-    # ---- CANCEL ----
     if text == "❌ Cancel":
         load = show_loading(m.chat.id)
         delete_loading(m.chat.id, load)
@@ -1220,7 +1245,6 @@ def admin_wizard_handler(m):
                          parse_mode='Markdown', reply_markup=admin_main_reply_keyboard())
         return
 
-    # ---- BACK ----
     if text == "🍃back":
         if step == 1:
             del admin_cmd_sessions[uid]
@@ -1228,9 +1252,7 @@ def admin_wizard_handler(m):
                              f"🥀 Hello, *{m.from_user.first_name}* welcome back to admin👋",
                              parse_mode='Markdown', reply_markup=admin_main_reply_keyboard())
         else:
-            # step == 2, go back to input step
             sess['step'] = 1
-            # Re-send the input prompt
             if cmd == 'search':
                 bot.send_message(m.chat.id,
                                  "🔍 *Search User*\n\nPlease send the user ID, username (with @), or name to search.",
@@ -1252,14 +1274,12 @@ def admin_wizard_handler(m):
                                  "✅ *Unblock User*\n\nPlease send the user ID, username (with @), or name to unblock.",
                                  parse_mode='Markdown', reply_markup=wizard_input_keyboard())
             else:
-                # For clearlogs, back cancels
                 del admin_cmd_sessions[uid]
                 bot.send_message(m.chat.id,
                                  f"🥀 Hello, *{m.from_user.first_name}* welcome back to admin👋",
                                  parse_mode='Markdown', reply_markup=admin_main_reply_keyboard())
         return
 
-    # ---- CONFIRM ----
     if text == "✅ Confirm":
         if cmd == 'clearlogs':
             db.clear_logs('broadcast')
@@ -1295,7 +1315,6 @@ def admin_wizard_handler(m):
             else:
                 bot.reply_to(m, "❌ Invalid user.")
         elif cmd == 'search':
-            # Already handled in input step, but just in case
             bot.reply_to(m, "🔍 Search completed.")
         else:
             bot.reply_to(m, "❌ Unknown command.")
@@ -1305,7 +1324,7 @@ def admin_wizard_handler(m):
                          parse_mode='Markdown', reply_markup=admin_main_reply_keyboard())
         return
 
-    # ---- INPUT HANDLING ----
+    # INPUT handling
     if cmd == 'search':
         uid_found = find_user_id(text)
         if not uid_found:
@@ -1359,11 +1378,8 @@ def admin_wizard_handler(m):
             bot.send_message(m.chat.id, f"Confirm action for `{uid_found}`?",
                              parse_mode='Markdown', reply_markup=wizard_confirm_keyboard())
         return
-    else:
-        # For clearlogs, no input expected
-        pass
 
-# ---------- SETTINGS WIZARD (unchanged) ----------
+# ---------- SETTINGS WIZARD ----------
 SETTING_MAP = {
     'link': 'channel_link',
     'botapi': 'bot_token',
@@ -1553,7 +1569,7 @@ def settings_wizard_handler(m):
         send_managebot_menu(m.chat.id)
         return
 
-    # ---- INPUT HANDLING ----
+    # INPUT handling
     if setting == 'link':
         if step == 1:
             if not text.startswith('https://t.me/'):
@@ -1636,7 +1652,6 @@ def active_users(m):
     deactivate_ai_mode(m.from_user.id)
     send_user_list(m.chat.id, 'active', 1)
 
-# ---- Changed to start admin wizard ----
 @bot.message_handler(func=lambda m: m.text == "🛸addadmin")
 def addadmin_btn(m):
     if not is_admin(m.from_user.id):
@@ -1936,10 +1951,8 @@ def cancel_delete_cb(call):
 # ---------- HELPERS ----------
 def find_user_id(query):
     q = query.strip()
-    # Try to parse as integer ID
     if q.isdigit():
         return int(q)
-    # Search by username or name
     for uid in db.get_all_users():
         try:
             chat = bot.get_chat(int(uid))
@@ -1951,7 +1964,7 @@ def find_user_id(query):
             pass
     return None
 
-# ---------- AI (REAL GROQ) ----------
+# ---------- AI ----------
 def get_ai_response(msg, key):
     if not key:
         return None
@@ -1986,7 +1999,7 @@ def get_ai_response(msg, key):
         logger.error(f"AI exception: {e}")
         return None
 
-# ---------- GENERIC BACK HANDLER – placed BEFORE AI to avoid interception ----------
+# ---------- GENERIC BACK HANDLER ----------
 @bot.message_handler(func=lambda m: m.text == "🍃back")
 def back_admin(m):
     if not is_admin(m.from_user.id):
@@ -1997,7 +2010,7 @@ def back_admin(m):
                      f"🥀 Hello, *{m.from_user.first_name}* welcome back to admin👋",
                      parse_mode='Markdown', reply_markup=admin_main_reply_keyboard())
 
-# ---------- AI REPLY HANDLER – MUST BE AT THE VERY END ----------
+# ---------- AI REPLY HANDLER (MUST BE LAST) ----------
 @bot.message_handler(func=lambda message: True)
 def ai_reply_all(m):
     uid = m.from_user.id if m.from_user else None
