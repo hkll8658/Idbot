@@ -395,6 +395,12 @@ def delete_loading(chat_id, msg_obj):
     except:
         pass
 
+def esc(text):
+    """Escape Markdown special characters."""
+    if not text:
+        return text
+    return re.sub(r'([_*\[\]()~`>#+\-=|{}.!])', r'\\\1', str(text))
+
 def get_user_display_name(uid):
     try:
         chat = bot.get_chat(uid)
@@ -494,7 +500,7 @@ def broadcast_confirm_keyboard():
     kb.row("✅ Send Now", "❌ Cancel")
     return kb
 
-# ---------- USER LIST (FIXED WITH ERROR DISPLAY) ----------
+# ---------- USER LIST (FIXED – Markdown escaping) ----------
 def build_user_list_keyboard(users, page, menu_type, per_page=10):
     try:
         start = (page - 1) * per_page
@@ -512,8 +518,10 @@ def build_user_list_keyboard(users, page, menu_type, per_page=10):
                 display = get_user_display_name(uid_int)
             except:
                 display = f"User {uid_int}"
+            # Escape display name for Markdown
+            display_esc = esc(display)
 
-            kb.add(InlineKeyboardButton(f"ℹ️ {display}", callback_data=f"user_info_{uid_int}"))
+            kb.add(InlineKeyboardButton(f"ℹ️ {display_esc}", callback_data=f"user_info_{uid_int}"))
 
             if menu_type in ('total', 'active'):
                 if not db.is_blocked(uid_int):
@@ -539,8 +547,10 @@ def build_user_list_keyboard(users, page, menu_type, per_page=10):
                 display = get_user_display_name(uid_int)
             except:
                 display = f"User {uid_int}"
+            display_esc = esc(display)
             status = "🔒 Blocked" if db.is_blocked(uid_int) else "✅ Active"
-            text += f"{idx}. `{uid}` {display}\n   {status}\n"
+            # status is fixed, no special chars
+            text += f"{idx}. `{uid}` {display_esc}\n   {status}\n"
 
         return text, kb
 
@@ -578,7 +588,6 @@ def send_user_list(chat_id, menu_type, page, edit_msg_id=None):
 
         text, kb = build_user_list_keyboard(users, page, menu_type)
         if kb is None:
-            # If keyboard building failed, show error and return to menu
             bot.send_message(chat_id, text, reply_markup=manage_users_reply_keyboard())
             return
 
@@ -595,7 +604,6 @@ def send_user_list(chat_id, menu_type, page, edit_msg_id=None):
 
     except Exception as e:
         logger.error(f"Error in send_user_list: {e}")
-        # Show the actual error to help debug
         bot.send_message(chat_id, f"❌ An error occurred while loading user list: {e}\nPlease report this to the developer.",
                          reply_markup=manage_users_reply_keyboard())
 
@@ -1344,9 +1352,9 @@ def admin_wizard_handler(m):
             uname = f"@{chat.username}" if chat.username else "No username"
             blocked = db.is_blocked(uid_found)
             adm = is_admin(uid_found)
-            def esc(t):
-                return re.sub(r'([_*\[\]()~`>#+\-=|{}.!])', r'\\\1', t)
-            result = f"👤 *User Info*\n━━━━━━━━━━━━━━━━━━\nID: `{uid_found}`\nName: {esc(name)}\nUsername: {esc(uname)}\nBlocked: {'Yes' if blocked else 'No'}\nAdmin: {'Yes' if adm else 'No'}"
+            def esc_local(t):
+                return re.sub(r'([_*\[\]()~`>#+\-=|{}.!])', r'\\\1', str(t))
+            result = f"👤 *User Info*\n━━━━━━━━━━━━━━━━━━\nID: `{uid_found}`\nName: {esc_local(name)}\nUsername: {esc_local(uname)}\nBlocked: {'Yes' if blocked else 'No'}\nAdmin: {'Yes' if adm else 'No'}"
             bot.reply_to(m, result, parse_mode='Markdown')
         except Exception as e:
             bot.reply_to(m, f"❌ Error fetching user details: {e}")
@@ -1709,9 +1717,9 @@ def user_info_cb(call):
         uname = f"@{chat.username}" if chat.username else "No username"
         blocked = db.is_blocked(uid)
         adm = is_admin(uid)
-        def esc(t):
-            return re.sub(r'([_*\[\]()~`>#+\-=|{}.!])', r'\\\1', t)
-        text = f"👤 *User Info*\n━━━━━━━━━━━━━━━━━━\nID: `{uid}`\nName: {esc(name)}\nUsername: {esc(uname)}\nBlocked: {'Yes' if blocked else 'No'}\nAdmin: {'Yes' if adm else 'No'}"
+        def esc_local(t):
+            return re.sub(r'([_*\[\]()~`>#+\-=|{}.!])', r'\\\1', str(t))
+        text = f"👤 *User Info*\n━━━━━━━━━━━━━━━━━━\nID: `{uid}`\nName: {esc_local(name)}\nUsername: {esc_local(uname)}\nBlocked: {'Yes' if blocked else 'No'}\nAdmin: {'Yes' if adm else 'No'}"
         bot.answer_callback_query(call.id)
         bot.send_message(call.message.chat.id, text, parse_mode='Markdown')
     except:
@@ -2188,9 +2196,9 @@ def cmd_search(m):
             uname = f"@{chat.username}" if chat.username else "No username"
             blocked = db.is_blocked(uid)
             adm = is_admin(uid)
-            def esc(t):
-                return re.sub(r'([_*\[\]()~`>#+\-=|{}.!])', r'\\\1', t)
-            result = f"👤 *User Info*\n━━━━━━━━━━━━━━━━━━\nID: `{uid}`\nName: {esc(name)}\nUsername: {esc(uname)}\nBlocked: {'Yes' if blocked else 'No'}\nAdmin: {'Yes' if adm else 'No'}"
+            def esc_local(t):
+                return re.sub(r'([_*\[\]()~`>#+\-=|{}.!])', r'\\\1', str(t))
+            result = f"👤 *User Info*\n━━━━━━━━━━━━━━━━━━\nID: `{uid}`\nName: {esc_local(name)}\nUsername: {esc_local(uname)}\nBlocked: {'Yes' if blocked else 'No'}\nAdmin: {'Yes' if adm else 'No'}"
             bot.reply_to(m, result, parse_mode='Markdown')
         except Exception as e:
             bot.reply_to(m, f"❌ Error: {e}")
